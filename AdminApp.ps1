@@ -12,6 +12,66 @@ $config = Get-Content $configFile -Encoding UTF8 | ConvertFrom-Json
 $httpPort = if ($config.server.httpPort) { $config.server.httpPort } else { 3000 }
 $nvrList = $config.nvrs
 
+# --- 2. KIỂM TRA VÀ TỰ ĐỘNG TẢI FFMPEG ---
+$ffmpegPath = Join-Path $PSScriptRoot "ffmpeg.exe"
+if (-not (Test-Path $ffmpegPath)) {
+    $ask = [System.Windows.Forms.MessageBox]::Show("Hệ thống không tìm thấy file 'ffmpeg.exe' (Công cụ lõi để xử lý Video).`n`nPhần mềm sẽ tự động tải về từ GitHub (Dung lượng khoảng 130MB). Bạn có đồng ý không?", "Thiếu Thành Phần Cốt Lõi", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    
+    if ($ask -eq "Yes") {
+        # Tạo Form báo đang tải
+        $FormDown = New-Object System.Windows.Forms.Form
+        $FormDown.Size = New-Object System.Drawing.Size(400,150)
+        $FormDown.StartPosition = "CenterScreen"
+        $FormDown.Text = "Đang Tải FFmpeg..."
+        $FormDown.ControlBox = $False
+        
+        $LblDown = New-Object System.Windows.Forms.Label
+        $LblDown.Text = "Đang tải công cụ xử lý Video (FFmpeg) từ Github...`nVui lòng đợi 1-3 phút tùy tốc độ mạng.`n`nLƯU Ý: Phần mềm có thể bị đơ tạm thời, TUYỆT ĐỐI KHÔNG TẮT!"
+        $LblDown.Location = New-Object System.Drawing.Point(20, 20)
+        $LblDown.Size = New-Object System.Drawing.Size(350, 70)
+        $LblDown.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Bold)
+        $FormDown.Controls.Add($LblDown)
+        
+        $FormDown.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        
+        try {
+            $zipUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+            $zipPath = Join-Path $PSScriptRoot "ffmpeg_temp.zip"
+            $extractPath = Join-Path $PSScriptRoot "ffmpeg_extracted"
+            
+            # Ép dùng TLS 1.2 cho Invoke-WebRequest
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            
+            # Tải và giải nén
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+            
+            $LblDown.Text = "Đã tải xong! Đang giải nén file ZIP..."
+            [System.Windows.Forms.Application]::DoEvents()
+            
+            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+            
+            # Lấy file exe ra
+            $exeSource = Join-Path $extractPath "ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe"
+            Move-Item -Path $exeSource -Destination $ffmpegPath -Force
+            
+            # Dọn dẹp
+            Remove-Item -Path $zipPath -Force
+            Remove-Item -Path $extractPath -Recurse -Force
+            
+            $FormDown.Close()
+            [System.Windows.Forms.MessageBox]::Show("Đã cài đặt FFmpeg thành công!", "Hoàn tất", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } catch {
+            $FormDown.Close()
+            [System.Windows.Forms.MessageBox]::Show("Có lỗi xảy ra khi tải FFmpeg: $_ `n`nVui lòng tải thủ công file ffmpeg.exe bỏ vào thư mục này.", "Lỗi Tải Xuống", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            exit
+        }
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("Phần mềm bắt buộc phải có ffmpeg.exe để chạy. Vui lòng tự tải và chép vào thư mục dự án.", "Lỗi Thiếu File", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        exit
+    }
+}
+
 # Cấu hình Cửa sổ phần mềm chính (Đã mở rộng kích thước)
 $Form = New-Object System.Windows.Forms.Form
 $Form.Text = "Phần Mềm Quản Trị Hệ Thống Camera BẢN CAO CẤP"
