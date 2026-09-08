@@ -1,0 +1,24 @@
+{
+  "server": {
+    "httpPort": 3000,
+    "wsPort": 3001
+  },
+  "nvrs": {
+    "1": {
+      "name": "Tên Hiển Thị Đầu Ghi 1",
+      "ip": "192.168.1.100",
+      "user": "admin",
+      "pass": "nhap_mat_khau_tai_day"
+    },
+    "2": {
+      "name": "Tên Hiển Thị Đầu Ghi 2",
+      "ip": "192.168.1.101",
+      "user": "admin",
+      "pass": "nhap_mat_khau_tai_day"
+    }
+  },
+  "video": {
+    "bitrate": "500k",
+    "fps": "15"
+  }
+}

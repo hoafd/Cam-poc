@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trình Xem Camera Bảo Mật</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { text-align: center; color: #4CAF50; }
+        
+        .camera-box {
+            background: #1e1e1e;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            width: 80%;
+            max-width: 1000px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+
+        canvas {
+            width: 100%;
+            background-color: #000;
+            aspect-ratio: 16 / 9;
+        }
+
+        .controls {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 1000px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            display: none; /* Ẩn đi cho đến khi xác thực thành công */
+        }
+        
+        .controls-header {
+            font-size: 14px;
+            color: #aaa;
+            text-align: center;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+
+        .timeline-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            gap: 10px;
+        }
+
+        .time-labels {
+            display: flex;
+            justify-content: space-between;
+            color: #ccc;
+            font-size: 14px;
+            font-family: monospace;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #444;
+            border-radius: 5px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4CAF50;
+            cursor: pointer;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+        
+        #seek-btn-container {
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        button {
+            padding: 10px 25px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        button:hover { background: #0056b3; }
+
+        #status {
+            text-align: center;
+            color: #888;
+            margin-top: 15px;
+            font-size: 18px;
+        }
+        .error { color: #f44336 !important; font-weight: bold; }
+    </style>
+    <script src="https://jsmpeg.com/jsmpeg.min.js"></script>
+</head>
+<body>
+
+    <h1>Trình Xem Bằng Chứng Camera</h1>
+    
+    <div class="camera-box">
+        <canvas id="video-canvas"></canvas>
+    </div>
+    
+    <div class="controls" id="controls-panel">
+        <div class="controls-header" id="time-limit-info">
+            Đang tải dữ liệu thời gian...
+        </div>
+        
+        <div class="timeline-container">
+            <input type="range" id="timeline" min="0" max="100" value="0">
+            <div class="time-labels">
+                <span id="current-time-label">00:00</span>
+                <span id="end-time-label">00:00</span>
+            </div>
+        </div>
+    </div>
+
+    <p id="status">Đang chờ tín hiệu...</p>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        const statusEl = document.getElementById('status');
+        const controlsPanel = document.getElementById('controls-panel');
+        const timeline = document.getElementById('timeline');
+        const currentTimeLabel = document.getElementById('current-time-label');
+        const endTimeLabel = document.getElementById('end-time-label');
+        
+        let player = null;
+        let wsPort = 3001;
+        let globalMinDate = null;
+        let globalMaxDate = null;
+        let timerInterval = null;
+        let isPlaying = false;
+
+        // Hàm phân tích chuỗi Hikvision (YYYYMMDDTHHMMSSZ) thành đối tượng Date của JS
+        function parseHikTime(str) {
+            if (!str) return new Date();
+            const y = str.substring(0,4), m = str.substring(4,6) - 1, d = str.substring(6,8);
+            const h = str.substring(9,11), min = str.substring(11,13), s = str.substring(13,15);
+            return new Date(Date.UTC(y, m, d, h, min, s));
+        }
+
+        // Hàm định dạng Date của JS sang chuỗi Hikvision
+        function formatHikTime(date) {
+            return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+        }
+
+        // Định dạng ra chữ dễ đọc cho giao diện
+        function formatReadable(date) {
+            const h = date.getHours().toString().padStart(2, '0');
+            const m = date.getMinutes().toString().padStart(2, '0');
+            const s = date.getSeconds().toString().padStart(2, '0');
+            const d = date.getDate().toString().padStart(2, '0');
+            const mo = (date.getMonth() + 1).toString().padStart(2, '0');
+            return `${h}:${m}:${s} - ${d}/${mo}`;
+        }
+
+        // Cập nhật nhãn thời gian hiện tại dựa trên giá trị thanh tua
+        function updateTimeLabel() {
+            if (!globalMinDate) return;
+            const currentSeconds = parseInt(timeline.value);
+            const current = new Date(globalMinDate.getTime() + currentSeconds * 1000);
+            currentTimeLabel.innerText = formatReadable(current);
+        }
+
+        // Sự kiện khi người dùng đang kéo thanh tua (hiển thị thời gian trượt)
+        timeline.addEventListener('input', updateTimeLabel);
+        
+        // Sự kiện khi người dùng buông chuột ra khỏi thanh tua -> Bắt đầu Tua
+        timeline.addEventListener('change', () => {
+            const currentSeconds = parseInt(timeline.value);
+            const seekDate = new Date(globalMinDate.getTime() + currentSeconds * 1000);
+            playVideo(formatHikTime(seekDate));
+        });
+
+        if (!token) {
+            statusEl.innerText = "LỖI BẢO MẬT: Bạn không có quyền truy cập. Vui lòng cung cấp Link chứa Token!";
+            statusEl.className = "error";
+        } else {
+            statusEl.innerText = `Đang đồng bộ giới hạn thời gian...`;
+            
+            // 1. Lấy thông tin cổng WS
+            fetch('/api/config')
+                .then(res => res.json())
+                .then(config => {
+                    wsPort = config.wsPort;
+                    // 2. Lấy giới hạn thời gian của Token
+                    return fetch(`/api/token-info?token=${token}`);
+                })
+                .then(res => res.json())
+                .then(info => {
+                    if (info.error) throw new Error(info.error);
+                    
+                    globalMinDate = parseHikTime(info.playbackStart);
+                    globalMaxDate = parseHikTime(info.playbackEnd);
+                    
+                    document.getElementById('time-limit-info').innerText = 
+                        `Đoạn Bằng Chứng: ${formatReadable(globalMinDate)} ĐẾN ${formatReadable(globalMaxDate)}`;
+                    
+                    const totalSeconds = Math.floor((globalMaxDate - globalMinDate) / 1000);
+                    timeline.max = totalSeconds;
+                    timeline.value = 0;
+                    
+                    endTimeLabel.innerText = formatReadable(globalMaxDate);
+                    updateTimeLabel();
+
+                    controlsPanel.style.display = 'flex';
+                    
+                    // Tự động phát từ đầu
+                    playVideo(info.playbackStart);
+                })
+                .catch(err => {
+                    statusEl.innerText = err.message || "Lỗi Mạng: Không thể kết nối với Máy chủ.";
+                    statusEl.className = "error";
+                });
+        }
+
+        function playVideo(hikStartTime) {
+            if (player) {
+                player.destroy(); // Hủy trình phát cũ nếu đang phát
+                player = null;
+            }
+            if (timerInterval) clearInterval(timerInterval);
+            isPlaying = false;
+
+            // Đồng bộ lại giá trị của thanh trượt cho khớp với thời gian yêu cầu
+            const seekDate = parseHikTime(hikStartTime);
+            const offsetSeconds = Math.floor((seekDate - globalMinDate) / 1000);
+            timeline.value = offsetSeconds;
+            updateTimeLabel();
+
+            statusEl.innerText = `Đang tải luồng video (vui lòng đợi 1-3 giây)...`;
+            statusEl.style.color = "#888";
+
+            const host = window.location.hostname;
+            const wsUrl = `ws://${host}:${wsPort}/?token=${token}&start=${hikStartTime}`;
+            const canvas = document.getElementById('video-canvas');
+            
+            player = new JSMpeg.Player(wsUrl, {
+                canvas: canvas,
+                audio: false,
+                videoBufferSize: 1024 * 1024 * 2,
+                reconnect: false, // TẮT tự động kết nối lại
+                onSourceEstablished: () => {
+                    statusEl.innerText = "▶ Đang phát video...";
+                    statusEl.style.color = "#4CAF50";
+                    isPlaying = true;
+                    
+                    // Bắt đầu đếm giây cho thanh tua tự chạy
+                    timerInterval = setInterval(() => {
+                        if (isPlaying) {
+                            let cv = parseInt(timeline.value);
+                            if (cv < parseInt(timeline.max)) {
+                                timeline.value = cv + 1;
+                                updateTimeLabel();
+                            } else {
+                                clearInterval(timerInterval);
+                            }
+                        }
+                    }, 1000);
+                },
+                onSourceCompleted: () => {
+                    isPlaying = false;
+                    clearInterval(timerInterval);
+                    statusEl.innerText = "⏹ Đã dừng phát (Hoặc Hết đoạn bằng chứng).";
+                    statusEl.className = "error";
+                }
+            });
+        }
+    </script>
+
+</body>
+</html>
